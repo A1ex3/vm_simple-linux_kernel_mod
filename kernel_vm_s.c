@@ -10,11 +10,11 @@
 #include <linux/device.h>
 #include <linux/version.h>
 
-MODULE_LICENSE("GPL");
-MODULE_AUTHOR("A1ex3");
-MODULE_DESCRIPTION("Simple VM x86_64");
-
 #define CLASS_NAME "vm_s_c"
+
+static struct page *k2u_page, *u2k_page;
+struct rb_to_user *k2u_rb = NULL;
+struct rb_to_kernel *u2k_rb = NULL;
 
 struct user_jit_function {
     unsigned char* bin_code;
@@ -38,15 +38,32 @@ static int dev_open(struct inode *, struct file *);
 static int dev_release(struct inode *, struct file *);
 static ssize_t dev_read(struct file *, char *, size_t, loff_t *);
 static ssize_t dev_write(struct file *, const char *, size_t, loff_t *);
+static int dev_mmap_ring_buffer(struct file *, struct vm_area_struct *);
 
 static struct file_operations fops = {
     .open = dev_open,
     .read = dev_read,
     .write = dev_write,
     .release = dev_release,
+    .mmap = dev_mmap_ring_buffer
 };
 
 int _vm_packet_handler(const struct dev_vm_packet*);
+
+static int dev_mmap_ring_buffer(struct file *filp, struct vm_area_struct *vma) {
+    unsigned long size = vma->vm_end - vma->vm_start;
+    unsigned long pfn;
+
+    if (vma->vm_pgoff == 0) {
+        pfn = page_to_pfn(k2u_page);
+    } else if (vma->vm_pgoff == 1) {
+        pfn = page_to_pfn(u2k_page);
+    } else {
+        return -EINVAL;
+    }
+
+    return remap_pfn_range(vma, vma->vm_start, pfn, size, vma->vm_page_prot);
+}
 
 static int save_jit_function(unsigned long id, unsigned char* bin_code, int size)
 {
@@ -177,11 +194,12 @@ static ssize_t dev_write(struct file *fil, const char *buffer, size_t len, loff_
     unsigned char* kernel_array = NULL;
     int packet_handler_result;
 
-    if (len != sizeof(struct dev_vm_packet)) {
+    if (len < sizeof(struct dev_vm_packet)) {
+        pr_err("VM_C: Invalid write length %zu (expected at least %zu)\n", len, sizeof(struct dev_vm_packet));
         return -EINVAL;
     }
     
-    if (copy_from_user(&packet, buffer, len)) {
+    if (copy_from_user(&packet, buffer, sizeof(struct dev_vm_packet))) {
         return -EFAULT;
     }
 
@@ -265,7 +283,6 @@ static int _compile_and_save_vm_bytecode(unsigned long id, const void* bytecode,
 static int _execute_saved_vm_bytecode(unsigned long id) {
     struct user_jit_function *desc;
     int vm_result;
-    unsigned long flags;
 
     rcu_read_lock();
     
@@ -276,9 +293,7 @@ static int _execute_saved_vm_bytecode(unsigned long id) {
         return -ENOENT;
     }
 
-    local_irq_save(flags);
     vm_result = ((int (*)(void))desc->bin_code)();
-    local_irq_restore(flags);
 
     rcu_read_unlock();
 
@@ -342,6 +357,12 @@ static int __init vm_init(void) {
         return -EINVAL;
     }
 
+    k2u_page = alloc_pages(GFP_KERNEL | __GFP_ZERO, 0);
+    u2k_page = alloc_pages(GFP_KERNEL | __GFP_ZERO, 0);
+    
+    k2u_rb = page_address(k2u_page);
+    u2k_rb = page_address(u2k_page);
+
     printk(KERN_INFO "VM Module initialized successfully.\n");
     return 0;
 }
@@ -351,8 +372,24 @@ static void __exit vm_exit(void)  {
 
     clear_all_jit_functions();
 
+    if (k2u_page) {
+        __free_pages(k2u_page, 0);
+        k2u_rb = NULL;
+        k2u_page = NULL;
+    }
+
+    if (u2k_page) {
+        __free_pages(u2k_page, 0);
+        u2k_rb = NULL;
+        u2k_page = NULL;
+    }
+
     printk(KERN_INFO "VM Module: Module unregistered.\n");
 }
+
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("A1ex3");
+MODULE_DESCRIPTION("Simple VM x86_64");
 
 module_init(vm_init);
 module_exit(vm_exit);
