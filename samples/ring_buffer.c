@@ -34,6 +34,8 @@ int main() {
         return 1;
     }
 
+    int id = 41;
+
     size_t page_size = getpagesize();
 
     struct rb_to_user *rb_k2u = mmap(NULL, page_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0 * page_size);
@@ -48,7 +50,7 @@ int main() {
     // Load
     struct dev_vm_packet p_write = {
         .cmd = DEV_VM_PACKET_CMD_WRITE,
-        .id = 41,
+        .id = id,
         .data_size = VM_CODE_INSTRUCTIONS_COUNT(my_code),
         .data = VM_GET_BYTECODE(my_code)
     };
@@ -72,7 +74,7 @@ int main() {
     // Execute
     struct dev_vm_packet p_exec = {
         .cmd = DEV_VM_PACKET_CMD_EXECUTE,
-        .id = 41,
+        .id = id,
         .data_size = 0,
         .data = NULL
     };
@@ -111,7 +113,7 @@ int main() {
     // Delete
     struct dev_vm_packet p_del = {
         .cmd = DEV_VM_PACKET_CMD_DELETE,
-        .id = 41,
+        .id = id,
         .data_size = 0,
         .data = NULL
     };

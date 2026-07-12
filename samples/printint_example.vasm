@@ -1,0 +1,6 @@
+str: .string "Hello world!\0"
+
+start:
+    len r0, str
+    call printint
+    exit 0

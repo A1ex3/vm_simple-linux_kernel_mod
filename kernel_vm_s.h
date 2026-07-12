@@ -9,7 +9,7 @@ struct instruction {
     int           imm;
 } __attribute__((packed));
 
-#define MAX_REGS 7
+#define MAX_REGS 8
 
 #define VM_REG0  0
 #define VM_REG1  1
