@@ -2,11 +2,11 @@
 #define __KERNEL_VM_S_H__
 
 struct instruction {
-    unsigned char op_code;
-    unsigned char arg0;
-    unsigned char arg1;
-    unsigned char arg2;
-    int           imm;
+    unsigned char       op_code;
+    unsigned char       arg0;
+    unsigned char       arg1;
+    unsigned char       arg2;
+    long long           imm;
 } __attribute__((packed));
 
 #define MAX_REGS 8
@@ -71,10 +71,14 @@ struct instruction {
     (arg0), \
     (arg1), \
     (arg2), \
-    (unsigned char)((imm) & 0xFF), \
-    (unsigned char)(((imm) >> 8) & 0xFF), \
-    (unsigned char)(((imm) >> 16) & 0xFF), \
-    (unsigned char)(((imm) >> 24) & 0xFF),
+    (unsigned char)(((unsigned long long)(imm)) & 0xFF), \
+    (unsigned char)((((unsigned long long)(imm)) >> 8) & 0xFF), \
+    (unsigned char)((((unsigned long long)(imm)) >> 16) & 0xFF), \
+    (unsigned char)((((unsigned long long)(imm)) >> 24) & 0xFF), \
+    (unsigned char)((((unsigned long long)(imm)) >> 32) & 0xFF), \
+    (unsigned char)((((unsigned long long)(imm)) >> 40) & 0xFF), \
+    (unsigned char)((((unsigned long long)(imm)) >> 48) & 0xFF), \
+    (unsigned char)((((unsigned long long)(imm)) >> 56) & 0xFF),
 
 enum vm_cmd_functions {
     VM_FUNCTION_PRINTINT = 0,

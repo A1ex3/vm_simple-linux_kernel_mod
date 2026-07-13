@@ -125,29 +125,34 @@ static int _delete_jit_function(unsigned long id)
 
 static void clear_all_jit_functions(void) {
     struct user_jit_function *desc;
-    struct radix_tree_iter iter;
     void __rcu **slot;
+    struct radix_tree_iter iter;
+    unsigned long id;
 
     pr_info("VM: Starting final memory cleanup...\n");
 
-    spin_lock(&user_jit_functions_lock);
-    
-    radix_tree_for_each_slot(slot, &user_jit_functions, &iter, 0) {
-        desc = radix_tree_deref_slot_protected(slot, &user_jit_functions_lock);
-        
-        if (desc) {
-            radix_tree_delete(&user_jit_functions, iter.index);
-            
-            if (desc->bin_code && kexport_execmem_free) {
-                kexport_execmem_free(desc->bin_code);
-            }
-            kfree(desc);
-            
-            pr_info("VM: Cleaned up JIT function at slot %lu\n", iter.index);
-        }
-    }
+    for (;;) {
+        desc = NULL;
 
-    spin_unlock(&user_jit_functions_lock);
+        rcu_read_lock();
+        radix_tree_for_each_slot(slot, &user_jit_functions, &iter, 0) {
+            desc = radix_tree_deref_slot(slot);
+            if (desc && !radix_tree_exception(desc)) {
+                id = iter.index;
+                break;
+            }
+            desc = NULL;
+        }
+        rcu_read_unlock();
+
+        if (!desc) {
+            break;
+        }
+
+        _delete_jit_function(id); 
+    }
+    
+    pr_info("VM: Final memory cleanup finished\n");
 }
 
 static int devc_create(void) {

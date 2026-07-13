@@ -18,5 +18,11 @@ all:
 		echo "Warning: Signing keys not found. Module will not be signed."; \
 	fi
 
+install:
+	insmod vm_simple.ko
+
+uninstall:
+	rmmod vm_simple.ko
+
 clean:
 	$(MAKE) -C $(KDIR) M=$(PWD) clean

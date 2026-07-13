@@ -3,7 +3,7 @@
 """
 VM Assembler Documentation
 --------------------------
-Instruction Format: [Opcode (1b)][Arg0 (1b)][Arg1 (1b)][Arg2 (1b)][Immediate (4b)]
+Instruction Format: [Opcode (1b)][Arg0 (1b)][Arg1 (1b)][Arg2 (1b)][Immediate (8b)]
 Registers: r0-r6, sp (r7)
 
 Instruction Set (Mnemonics & Syntax):
@@ -285,7 +285,7 @@ def compile_asm(source_code: str) -> bytes:
                     op = VM_OPC_MOV
 
                 verify_instruction(op, a0, a1, a2, imm, i, len(instructions_text))
-                bytecode.extend(struct.pack('<BBBBi', op, a0, a1, a2, imm))
+                bytecode.extend(struct.pack('<BBBBq', op, a0, a1, a2, imm))
                 matched = True
                 break
                 
@@ -295,14 +295,18 @@ def compile_asm(source_code: str) -> bytes:
     return bytecode
 
 def print_beautiful_bytecode(bytecode: bytearray):
+    instr_size = 12  # op (1) + arg0 (1) + arg1 (1) + arg2 (1) + imm (8)
     print("\n--------------------------BYTECODE DUMP----------------------------------")
-    print(f"{'Addr':<6} | {'Raw Hex Data':<23} | {'Decoded Struct (op, a0, a1, a2, imm)':<40}")
-    print("-" * 76)
-    for i in range(0, len(bytecode), 8):
-        chunk = bytecode[i:i+8]
-        if len(chunk) < 8: break
-        print(f"[{i//8:04x}] | {' '.join(f'{b:02x}' for b in chunk):<23} | op:{chunk[0]:<2} a0:{chunk[1]} a1:{chunk[2]} a2:{chunk[3]} | imm:{struct.unpack('<i', chunk[4:])[0]}")
-    print("=" * 76)
+    print(f"{'Addr':<6} | {'Raw Hex Data':<35} | {'Decoded Struct (op, a0, a1, a2, imm)':<45}")
+    print("-" * 85)
+    for i in range(0, len(bytecode), instr_size):
+        chunk = bytecode[i:i+instr_size]
+        if len(chunk) < instr_size:
+            break
+        hex_str = ' '.join(f'{b:02x}' for b in chunk)
+        imm_val = struct.unpack('<q', chunk[4:12])[0]
+        print(f"[{i//instr_size:04x}] | {hex_str:<35} | op:{chunk[0]:<2} a0:{chunk[1]} a1:{chunk[2]} a2:{chunk[3]} | imm:{imm_val}")
+    print("=" * 85)
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
@@ -317,7 +321,8 @@ if __name__ == '__main__':
         with open(out_file, 'wb') as f:
             f.write(bytecode)
         
-        print(f"Success! Compiled {len(bytecode) // 8} instructions to '{out_file}'.")
+        instr_count = len(bytecode) // 12
+        print(f"Success! Compiled {instr_count} instructions to '{out_file}'.")
         print_beautiful_bytecode(bytecode)
     except Exception as e:
         print(f"\n[!] Compilation error:\n{e}")
