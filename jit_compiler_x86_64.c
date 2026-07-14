@@ -4,7 +4,7 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 
-#define VM_JIT_STACK_FRAME_SIZE 520
+#define VM_JIT_STACK_FRAME_SIZE 512
 
 struct x86_64 {
     int code;
@@ -349,7 +349,6 @@ static int emit_exec_function(struct jit_ctx* ctx, struct instruction* instr) {
     if (!check_space(ctx, 110)) return -1;
     
     ctx->buffer[ctx->pos++] = 0x41; ctx->buffer[ctx->pos++] = 0x50; // push r8
-    ctx->buffer[ctx->pos++] = 0x41; ctx->buffer[ctx->pos++] = 0x51; // push r9
     ctx->buffer[ctx->pos++] = 0x55;                           // push rbp
     ctx->buffer[ctx->pos++] = 0x53;                           // push rbx
     ctx->buffer[ctx->pos++] = 0x41; ctx->buffer[ctx->pos++] = 0x54; // push r12
@@ -381,7 +380,6 @@ static int emit_exec_function(struct jit_ctx* ctx, struct instruction* instr) {
     ctx->buffer[ctx->pos++] = 0x41; ctx->buffer[ctx->pos++] = 0x5C; // pop r12
     ctx->buffer[ctx->pos++] = 0x5B;                                 // pop rbx
     ctx->buffer[ctx->pos++] = 0x5D;                                 // pop rbp
-    ctx->buffer[ctx->pos++] = 0x41; ctx->buffer[ctx->pos++] = 0x59; // pop r9
     ctx->buffer[ctx->pos++] = 0x41; ctx->buffer[ctx->pos++] = 0x58; // pop r8
 
     struct x86_64 target_reg = _get_x86_64_reg(instr->arg0);

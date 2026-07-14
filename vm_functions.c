@@ -4,8 +4,6 @@
 #include <asm/barrier.h>
 
 static int vm_function_printint(int n) {
-    if (n < INT_MIN || n > INT_MAX) return -1;
-
     printk(KERN_INFO "%d\n", n);
     return 0;
 }
