@@ -1,5 +1,5 @@
-#ifndef VM_FUNCTIONS_H
-#define VM_FUNCTIONS_H
+#ifndef __VM_FUNCTIONS_H__
+#define __VM_FUNCTIONS_H__
 
 #include "kernel_vm_s.h"
 

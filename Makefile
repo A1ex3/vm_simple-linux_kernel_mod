@@ -1,5 +1,5 @@
 obj-m += vm_simple.o
-vm_simple-y := kernel_vm_s.o jit_compiler_x86_64.o vm_functions.o
+vm_simple-y := $(patsubst %.c,%.o,$(wildcard *.c))
 
 KDIR := /lib/modules/$(shell uname -r)/build
 PWD := $(shell pwd)

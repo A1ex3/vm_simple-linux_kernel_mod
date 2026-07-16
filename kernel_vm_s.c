@@ -1,5 +1,6 @@
 #include "kernel_vm_s.h"
 #include "jit_compiler_x86_64.h"
+#include "vm_verificator.h"
 
 #include <linux/module.h>
 #include <linux/execmem.h>

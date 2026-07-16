@@ -296,7 +296,7 @@ def compile_asm(source_code: str) -> bytes:
 
 def print_beautiful_bytecode(bytecode: bytearray):
     instr_size = 12  # op (1) + arg0 (1) + arg1 (1) + arg2 (1) + imm (8)
-    print("\n--------------------------BYTECODE DUMP----------------------------------")
+    print("\n--------------------------BYTECODE DUMP----------------------------------------------")
     print(f"{'Addr':<6} | {'Raw Hex Data':<35} | {'Decoded Struct (op, a0, a1, a2, imm)':<45}")
     print("-" * 85)
     for i in range(0, len(bytecode), instr_size):
@@ -306,7 +306,7 @@ def print_beautiful_bytecode(bytecode: bytearray):
         hex_str = ' '.join(f'{b:02x}' for b in chunk)
         imm_val = struct.unpack('<q', chunk[4:12])[0]
         print(f"[{i//instr_size:04x}] | {hex_str:<35} | op:{chunk[0]:<2} a0:{chunk[1]} a1:{chunk[2]} a2:{chunk[3]} | imm:{imm_val}")
-    print("=" * 85)
+    print("-" * 85)
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
