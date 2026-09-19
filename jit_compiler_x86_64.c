@@ -38,6 +38,8 @@ static struct x86_64 _get_x86_64_reg(int vm_reg) {
         {3, 1}, // vm.regs[6] -> R11
         {5, 0}  // vm.regs[7] -> RBP
     };
+
+    vm_reg &= 7;
     return mapping[vm_reg];
 }
 
@@ -79,15 +81,35 @@ static int emit_add_sub(struct jit_ctx* ctx, struct instruction* instr, int is_s
     struct x86_64 src1 = _get_x86_64_reg(instr->arg1);
     struct x86_64 src2 = _get_x86_64_reg(instr->arg2);
 
-    ctx->buffer[ctx->pos++] = _make_rex_w(&src1, &dst);
-    ctx->buffer[ctx->pos++] = 0x89;
-    ctx->buffer[ctx->pos++] = 0xC0 | (src1.code << 3) | dst.code;
+    if (instr->arg0 == instr->arg1) {
+        ctx->buffer[ctx->pos++] = _make_rex_w(&src2, &dst);
+        ctx->buffer[ctx->pos++] = is_sub ? 0x29 : 0x01;
+        ctx->buffer[ctx->pos++] = 0xC0 | (src2.code << 3) | dst.code;
+        ctx->complexity_limit_instr_x86_64 += 1; 
+    } else if (!is_sub && instr->arg0 == instr->arg2) {
+        ctx->buffer[ctx->pos++] = _make_rex_w(&src1, &dst);
+        ctx->buffer[ctx->pos++] = 0x01;
+        ctx->buffer[ctx->pos++] = 0xC0 | (src1.code << 3) | dst.code;
+        ctx->complexity_limit_instr_x86_64 += 1;
+    } else if (is_sub && instr->arg0 == instr->arg2) {
+        ctx->buffer[ctx->pos++] = 0x48 | dst.is_ext;
+        ctx->buffer[ctx->pos++] = 0xF7;
+        ctx->buffer[ctx->pos++] = 0xC0 | (3 << 3) | dst.code; // neg dst
 
-    ctx->buffer[ctx->pos++] = _make_rex_w(&src2, &dst);
-    ctx->buffer[ctx->pos++] = is_sub ? 0x29 : 0x01;
-    ctx->buffer[ctx->pos++] = 0xC0 | (src2.code << 3) | dst.code;
+        ctx->buffer[ctx->pos++] = _make_rex_w(&src1, &dst);
+        ctx->buffer[ctx->pos++] = 0x01;
+        ctx->buffer[ctx->pos++] = 0xC0 | (src1.code << 3) | dst.code; // add dst, src1
+        ctx->complexity_limit_instr_x86_64 += 2;
+    } else {
+        ctx->buffer[ctx->pos++] = _make_rex_w(&src1, &dst);
+        ctx->buffer[ctx->pos++] = 0x89;
+        ctx->buffer[ctx->pos++] = 0xC0 | (src1.code << 3) | dst.code;
 
-    ctx->complexity_limit_instr_x86_64 += 2;
+        ctx->buffer[ctx->pos++] = _make_rex_w(&src2, &dst);
+        ctx->buffer[ctx->pos++] = is_sub ? 0x29 : 0x01;
+        ctx->buffer[ctx->pos++] = 0xC0 | (src2.code << 3) | dst.code;
+        ctx->complexity_limit_instr_x86_64 += 2;
+    }
     return 0;
 }
 
@@ -97,28 +119,40 @@ static int emit_mul(struct jit_ctx* ctx, struct instruction* instr) {
     struct x86_64 src1 = _get_x86_64_reg(instr->arg1);
     struct x86_64 src2 = _get_x86_64_reg(instr->arg2);
 
-    ctx->buffer[ctx->pos++] = _make_rex_w(&src1, &dst);
-    ctx->buffer[ctx->pos++] = 0x89;
-    ctx->buffer[ctx->pos++] = 0xC0 | (src1.code << 3) | dst.code;
+    if (instr->arg0 == instr->arg1) {
+        ctx->buffer[ctx->pos++] = _make_rex_w(&dst, &src2);
+        ctx->buffer[ctx->pos++] = 0x0F; ctx->buffer[ctx->pos++] = 0xAF;
+        ctx->buffer[ctx->pos++] = 0xC0 | (dst.code << 3) | src2.code;
+        ctx->complexity_limit_instr_x86_64 += 1;
+    } else if (instr->arg0 == instr->arg2) {
+        ctx->buffer[ctx->pos++] = _make_rex_w(&dst, &src1);
+        ctx->buffer[ctx->pos++] = 0x0F; ctx->buffer[ctx->pos++] = 0xAF;
+        ctx->buffer[ctx->pos++] = 0xC0 | (dst.code << 3) | src1.code;
+        ctx->complexity_limit_instr_x86_64 += 1;
+    } else {
+        ctx->buffer[ctx->pos++] = _make_rex_w(&src1, &dst);
+        ctx->buffer[ctx->pos++] = 0x89;
+        ctx->buffer[ctx->pos++] = 0xC0 | (src1.code << 3) | dst.code;
 
-    ctx->buffer[ctx->pos++] = _make_rex_w(&dst, &src2);
-    ctx->buffer[ctx->pos++] = 0x0F; ctx->buffer[ctx->pos++] = 0xAF;
-    ctx->buffer[ctx->pos++] = 0xC0 | (dst.code << 3) | src2.code;
-
-    ctx->complexity_limit_instr_x86_64 += 2;
+        ctx->buffer[ctx->pos++] = _make_rex_w(&dst, &src2);
+        ctx->buffer[ctx->pos++] = 0x0F; ctx->buffer[ctx->pos++] = 0xAF;
+        ctx->buffer[ctx->pos++] = 0xC0 | (dst.code << 3) | src2.code;
+        ctx->complexity_limit_instr_x86_64 += 2;
+    }
     return 0;
+    /* Note: unlike SUB, MUL is commutative, so aliasing dst with either
+     * source is always safe here - no analogous bug to emit_add_sub's. */
 }
 
 static int emit_divide(struct jit_ctx* ctx, struct instruction* instr) {
     if (!check_space(ctx, 50)) return -1;
-    
     struct x86_64 dst = _get_x86_64_reg(instr->arg0);
     struct x86_64 src1 = _get_x86_64_reg(instr->arg1);
     struct x86_64 src2 = _get_x86_64_reg(instr->arg2);
     struct x86_64 rax_reg = {0, 0}; 
 
     // test src2, src2; jz div_zero
-    ctx->buffer[ctx->pos++] = 0x48 | src2.is_ext;
+    ctx->buffer[ctx->pos++] = 0x48 | (src2.is_ext << 2) | src2.is_ext;
     ctx->buffer[ctx->pos++] = 0x85;
     ctx->buffer[ctx->pos++] = 0xC0 | (src2.code << 3) | src2.code;
 
@@ -173,15 +207,45 @@ static int emit_divide(struct jit_ctx* ctx, struct instruction* instr) {
 static int emit_mov(struct jit_ctx* ctx, struct instruction* instr) {
     if (!check_space(ctx, 10)) return -1;
     struct x86_64 dst = _get_x86_64_reg(instr->arg0);
-    ctx->buffer[ctx->pos++] = 0x48 | dst.is_ext;
-    ctx->buffer[ctx->pos++] = 0xB8 | dst.code;
-    *(long long*)(ctx->buffer + ctx->pos) = instr->imm; ctx->pos += 8;
+
+    if (instr->imm == 0) {
+        // xor reg32, reg32
+        if (dst.is_ext) {
+            ctx->buffer[ctx->pos++] = 0x40 | (dst.is_ext << 2) | dst.is_ext;
+        }
+        ctx->buffer[ctx->pos++] = 0x31;
+        ctx->buffer[ctx->pos++] = 0xC0 | (dst.code << 3) | dst.code;
+    } 
+    else if (instr->imm > 0 && instr->imm <= 0xFFFFFFFFLL) {
+        // mov reg32, imm32
+        if (dst.is_ext) ctx->buffer[ctx->pos++] = 0x41;
+        ctx->buffer[ctx->pos++] = 0xB8 | dst.code;
+        *(int*)(ctx->buffer + ctx->pos) = (int)instr->imm; ctx->pos += 4;
+    }
+    else if (instr->imm >= -2147483648LL && instr->imm < 0) {
+        // mov reg64, sign-ext imm32
+        ctx->buffer[ctx->pos++] = 0x48 | dst.is_ext;
+        ctx->buffer[ctx->pos++] = 0xC7;
+        ctx->buffer[ctx->pos++] = 0xC0 | dst.code;
+        *(int*)(ctx->buffer + ctx->pos) = (int)instr->imm; ctx->pos += 4;
+    } 
+    else {
+        // movabs
+        ctx->buffer[ctx->pos++] = 0x48 | dst.is_ext;
+        ctx->buffer[ctx->pos++] = 0xB8 | dst.code;
+        *(long long*)(ctx->buffer + ctx->pos) = instr->imm; ctx->pos += 8;
+    }
+
     ctx->complexity_limit_instr_x86_64 += 1;
     return 0;
 }
 
 static int emit_mov_reg(struct jit_ctx* ctx, struct instruction* instr) {
     if (!check_space(ctx, 3)) return -1;
+    
+    // Optimization: NOP-elimination.
+    if (instr->arg0 == instr->arg1) return 0;
+
     struct x86_64 dst = _get_x86_64_reg(instr->arg0);
     struct x86_64 src = _get_x86_64_reg(instr->arg1);
     ctx->buffer[ctx->pos++] = _make_rex_w(&src, &dst);
@@ -193,13 +257,17 @@ static int emit_mov_reg(struct jit_ctx* ctx, struct instruction* instr) {
 
 static int emit_store_stack(struct jit_ctx* ctx, struct instruction* instr) {
     if (!check_space(ctx, 7)) return -1;
+
+    if (instr->imm < 0 || instr->imm > VM_JIT_STACK_FRAME_SIZE - 8 || instr->imm % 8 != 0)
+        return -1;
+
     struct x86_64 src = _get_x86_64_reg(instr->arg0);
     
     ctx->buffer[ctx->pos++] = 0x48 | (src.is_ext << 2);
     ctx->buffer[ctx->pos++] = 0x89;
     ctx->buffer[ctx->pos++] = 0x80 | (src.code << 3) | 5; 
     
-    *(int*)(ctx->buffer + ctx->pos) = (int)instr->imm;
+    *(int*)(ctx->buffer + ctx->pos) = (int)instr->imm - VM_JIT_STACK_FRAME_SIZE;
     ctx->pos += 4;
     
     ctx->complexity_limit_instr_x86_64 += 1;
@@ -208,13 +276,17 @@ static int emit_store_stack(struct jit_ctx* ctx, struct instruction* instr) {
 
 static int emit_load_stack(struct jit_ctx* ctx, struct instruction* instr) {
     if (!check_space(ctx, 7)) return -1;
+
+    if (instr->imm < 0 || instr->imm > VM_JIT_STACK_FRAME_SIZE - 8 || instr->imm % 8 != 0)
+        return -1;
+
     struct x86_64 dst = _get_x86_64_reg(instr->arg0);
     
     ctx->buffer[ctx->pos++] = 0x48 | (dst.is_ext << 2);
     ctx->buffer[ctx->pos++] = 0x8B;
     ctx->buffer[ctx->pos++] = 0x80 | (dst.code << 3) | 5; 
     
-    *(int*)(ctx->buffer + ctx->pos) = (int)instr->imm;
+    *(int*)(ctx->buffer + ctx->pos) = (int)instr->imm - VM_JIT_STACK_FRAME_SIZE;
     ctx->pos += 4;
     
     ctx->complexity_limit_instr_x86_64 += 1;
@@ -224,6 +296,9 @@ static int emit_load_stack(struct jit_ctx* ctx, struct instruction* instr) {
 static int emit_exec_function(struct jit_ctx* ctx, struct instruction* instr) {
     struct x86_64 abi_regs[] = { {7, 0}, {6, 0}, {2, 0}, {1, 0}, {0, 1}, {1, 1} };
     int abi_regs_size = sizeof(abi_regs) / sizeof(abi_regs[0]);
+
+    if (instr->imm < 0 || (unsigned long long)instr->imm >= ARRAY_SIZE(vm_functions))
+        return -1;
 
     if (!check_space(ctx, 110)) return -1;
     
@@ -279,7 +354,7 @@ int jit_x86_64_compiler(struct instruction* instr, int instr_count, unsigned cha
     ctx.complexity_fixups = (int*)kzalloc(instr_count * sizeof(int), GFP_KERNEL);
     ctx.jump_fixups       = (int*)kzalloc(instr_count * sizeof(int), GFP_KERNEL);
     ctx.jump_target_pc    = (int*)kzalloc(instr_count * sizeof(int), GFP_KERNEL);
-    ctx.div_fixups        = (int*)kzalloc(instr_count * sizeof(int), GFP_KERNEL);
+    ctx.div_fixups        = (int*)kzalloc(2 * instr_count * sizeof(int), GFP_KERNEL);
     ctx.complexity_fixup_count = 0;
     ctx.jump_fixup_count = 0;
     ctx.div_fixup_count = 0;
@@ -296,12 +371,12 @@ int jit_x86_64_compiler(struct instruction* instr, int instr_count, unsigned cha
     ctx.buffer[ctx.pos++] = 0x41; ctx.buffer[ctx.pos++] = 0x56; // push r14
     ctx.buffer[ctx.pos++] = 0x41; ctx.buffer[ctx.pos++] = 0x57; // push r15
 
+    // mov rbp, rsp
+    ctx.buffer[ctx.pos++] = 0x48; ctx.buffer[ctx.pos++] = 0x89; ctx.buffer[ctx.pos++] = 0xE5;
+
     // sub rsp, VM_JIT_STACK_FRAME_SIZE
     ctx.buffer[ctx.pos++] = 0x48; ctx.buffer[ctx.pos++] = 0x81; ctx.buffer[ctx.pos++] = 0xEC;
     *(int*)(ctx.buffer + ctx.pos) = VM_JIT_STACK_FRAME_SIZE; ctx.pos += 4;
-    
-    // mov rbp, rsp
-    ctx.buffer[ctx.pos++] = 0x48; ctx.buffer[ctx.pos++] = 0x89; ctx.buffer[ctx.pos++] = 0xE5;
 
     // Zero VM registers according to new mapping
     ctx.buffer[ctx.pos++] = 0x31; ctx.buffer[ctx.pos++] = 0xDB; // rbx (regs[0])
@@ -340,9 +415,13 @@ int jit_x86_64_compiler(struct instruction* instr, int instr_count, unsigned cha
         case VM_OPC_JGE: {
             int is_jmp = (curr_instr.op_code == VM_OPC_JMP);
             if (!check_space(&ctx, is_jmp ? 18 : 22)) goto bad;
+
+            int target_pc = i + (int)curr_instr.imm;
+            if (target_pc < 0 || target_pc >= instr_count) goto bad;
+
             int native_cost = 0;
             if (curr_instr.imm < 0) {
-                for (int j = i + (int)curr_instr.imm; j <= i; j++) 
+                for (int j = target_pc; j <= i; j++)
                     native_cost += _jit_x86_64_compiler_get_native_instruction_count(instr[j].op_code);
             } else {
                 native_cost = _jit_x86_64_compiler_get_native_instruction_count(curr_instr.op_code);
@@ -357,14 +436,15 @@ int jit_x86_64_compiler(struct instruction* instr, int instr_count, unsigned cha
             ctx.complexity_fixups[ctx.complexity_fixup_count++] = ctx.pos;
             *(int*)(ctx.buffer + ctx.pos) = 0; ctx.pos += 4;
 
-            int target_pc = i + (int)curr_instr.imm;
-
+            // Optimization: Useless Jump Elimination
             if (is_jmp) {
-                ctx.buffer[ctx.pos++] = 0xE9;
-                ctx.jump_fixups[ctx.jump_fixup_count] = ctx.pos;
-                ctx.jump_target_pc[ctx.jump_fixup_count] = target_pc;
-                ctx.jump_fixup_count++;
-                *(int*)(ctx.buffer + ctx.pos) = 0; ctx.pos += 4;
+                if (curr_instr.imm != 1) {
+                    ctx.buffer[ctx.pos++] = 0xE9;
+                    ctx.jump_fixups[ctx.jump_fixup_count] = ctx.pos;
+                    ctx.jump_target_pc[ctx.jump_fixup_count] = target_pc;
+                    ctx.jump_fixup_count++;
+                    *(int*)(ctx.buffer + ctx.pos) = 0; ctx.pos += 4;
+                }
             } else {
                 struct x86_64 reg0 = _get_x86_64_reg(curr_instr.arg0);
                 struct x86_64 reg1 = _get_x86_64_reg(curr_instr.arg1);

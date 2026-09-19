@@ -10,6 +10,7 @@
 #include <linux/slab.h>
 #include <linux/device.h>
 #include <linux/version.h>
+#include <linux/refcount.h>
 
 #define CLASS_NAME "vm_s_c"
 
@@ -20,10 +21,9 @@ struct rb_to_kernel *u2k_rb = NULL;
 struct user_jit_function {
     unsigned char* bin_code;
     int len;
-    struct rcu_head rcu;
+    refcount_t refcnt;
 };
 
-struct radix_tree_root user_jit_functions_tree;
 static DEFINE_SPINLOCK(user_jit_functions_lock);
 RADIX_TREE(user_jit_functions, GFP_KERNEL);
 
@@ -66,6 +66,14 @@ static int dev_mmap_ring_buffer(struct file *filp, struct vm_area_struct *vma) {
     return remap_pfn_range(vma, vma->vm_start, pfn, size, vma->vm_page_prot);
 }
 
+static void free_jit_desc(struct user_jit_function *desc) {
+    if (!desc) return;
+    if (desc->bin_code && kexport_execmem_free) {
+        kexport_execmem_free(desc->bin_code);
+    }
+    kfree(desc);
+}
+
 static int save_jit_function(unsigned long id, unsigned char* bin_code, int size)
 {
     struct user_jit_function *desc;
@@ -77,6 +85,7 @@ static int save_jit_function(unsigned long id, unsigned char* bin_code, int size
 
     desc->bin_code = bin_code;
     desc->len = size;
+    refcount_set(&desc->refcnt, 1);
 
     err = radix_tree_preload(GFP_KERNEL);
     if (err) {
@@ -85,10 +94,9 @@ static int save_jit_function(unsigned long id, unsigned char* bin_code, int size
     }
 
     spin_lock(&user_jit_functions_lock);
-
     err = radix_tree_insert(&user_jit_functions, id, desc);
-
     spin_unlock(&user_jit_functions_lock);
+    
     radix_tree_preload_end();
 
     if (err == -EEXIST) {
@@ -112,13 +120,9 @@ static int _delete_jit_function(unsigned long id)
         return -ENOENT;
     }
 
-    synchronize_rcu();
-
-    if (desc->bin_code && kexport_execmem_free) {
-        kexport_execmem_free(desc->bin_code);
+    if (refcount_dec_and_test(&desc->refcnt)) {
+        free_jit_desc(desc);
     }
-    
-    kfree(desc);
 
     pr_info("VM: JIT function %lu successfully deleted from kernel\n", id);
     return 0;
@@ -126,31 +130,31 @@ static int _delete_jit_function(unsigned long id)
 
 static void clear_all_jit_functions(void) {
     struct user_jit_function *desc;
-    void __rcu **slot;
-    struct radix_tree_iter iter;
     unsigned long id;
 
     pr_info("VM: Starting final memory cleanup...\n");
 
     for (;;) {
+        spin_lock(&user_jit_functions_lock);
         desc = NULL;
-
-        rcu_read_lock();
-        radix_tree_for_each_slot(slot, &user_jit_functions, &iter, 0) {
-            desc = radix_tree_deref_slot(slot);
-            if (desc && !radix_tree_exception(desc)) {
+        if (radix_tree_gang_lookup(&user_jit_functions, (void **)&desc, 0, 1) > 0) {
+            struct radix_tree_iter iter;
+            void __rcu **slot;
+            radix_tree_for_each_slot(slot, &user_jit_functions, &iter, 0) {
                 id = iter.index;
+                desc = radix_tree_delete(&user_jit_functions, id);
                 break;
             }
-            desc = NULL;
         }
-        rcu_read_unlock();
+        spin_unlock(&user_jit_functions_lock);
 
         if (!desc) {
             break;
         }
 
-        _delete_jit_function(id); 
+        if (refcount_dec_and_test(&desc->refcnt)) {
+            free_jit_desc(desc);
+        }
     }
     
     pr_info("VM: Final memory cleanup finished\n");
@@ -210,7 +214,7 @@ static ssize_t dev_write(struct file *fil, const char *buffer, size_t len, loff_
     }
 
     if (packet.cmd == DEV_VM_PACKET_CMD_WRITE) {
-        if (packet.data_size == 0 || packet.data_size > (VM_COMPLEXITY_LIMIT_INSTRUCTIONS * sizeof(struct instruction))) {
+        if (packet.data_size == 0 || (unsigned long)(packet.data_size / sizeof(struct instruction)) > (VM_COMPLEXITY_LIMIT_INSTRUCTIONS * sizeof(struct instruction))) {
             return -EINVAL;
         }
 
@@ -290,18 +294,23 @@ static int _execute_saved_vm_bytecode(unsigned long id) {
     struct user_jit_function *desc;
     int vm_result;
 
-    rcu_read_lock();
-    
+    spin_lock(&user_jit_functions_lock);
     desc = radix_tree_lookup(&user_jit_functions, id);
+    if (desc) {
+        refcount_inc(&desc->refcnt);
+    }
+    spin_unlock(&user_jit_functions_lock);
+
     if (!desc) {
-        rcu_read_unlock();
         pr_warn("VM: JIT function %lu not found for execution\n", id);
         return -ENOENT;
     }
 
     vm_result = ((int (*)(void))desc->bin_code)();
 
-    rcu_read_unlock();
+    if (refcount_dec_and_test(&desc->refcnt)) {
+        free_jit_desc(desc);
+    }
 
     pr_info("VM: JIT execution %lu finished with status: %d\n", id, vm_result);
     return vm_result;
@@ -366,6 +375,13 @@ static int __init vm_init(void) {
     k2u_page = alloc_pages(GFP_KERNEL | __GFP_ZERO, 0);
     u2k_page = alloc_pages(GFP_KERNEL | __GFP_ZERO, 0);
     
+    if (!k2u_page || !u2k_page) {
+        if (k2u_page) __free_pages(k2u_page, 0);
+        if (u2k_page) __free_pages(u2k_page, 0);
+        devc_unregister();
+        return -ENOMEM;
+    }
+
     k2u_rb = page_address(k2u_page);
     u2k_rb = page_address(u2k_page);
 

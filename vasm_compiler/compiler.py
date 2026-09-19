@@ -69,8 +69,8 @@ VM_OPC_LOAD_STACK = 18
 VM_OPC_GET_LEN = 19
 
 VM_REGSP = 7
-VM_FUNCTIONS_COUNT = 3
-FUNCTIONS = {"printint": 0, "push_rb": 1, "pop_rb": 2}
+FUNCTIONS = {"printint": 0, "push_rb": 1, "pop_rb": 2, "net_ping": 3}
+VM_FUNCTIONS_COUNT = len(FUNCTIONS)
 
 @dataclass
 class OpVariant:

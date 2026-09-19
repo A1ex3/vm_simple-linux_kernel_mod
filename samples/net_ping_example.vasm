@@ -1,0 +1,4 @@
+start:
+    mov r0, 134744072 # 8.8.8.8
+    call net_ping
+    exit 0
